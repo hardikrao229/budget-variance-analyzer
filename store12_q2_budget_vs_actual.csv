@@ -1,0 +1,17 @@
+Line Item,Category,Type,Budget,Actual
+Sales - Mobiles,Sales,Revenue,4200000,4655000
+Sales - Laptops,Sales,Revenue,3100000,2480000
+Sales - TVs & Large Appliances,Sales,Revenue,3800000,3720000
+Sales - Accessories,Sales,Revenue,650000,812000
+Extended Warranty Income,Other Income,Revenue,280000,214000
+Cost of Goods Sold,COGS,Expense,9150000,9070000
+Staff Salaries,People,Expense,820000,845000
+Sales Incentives,People,Expense,210000,298000
+Store Rent,Occupancy,Expense,540000,540000
+Electricity,Occupancy,Expense,165000,212000
+Digital Marketing,Marketing,Expense,240000,198000
+Print & Local Promotions,Marketing,Expense,90000,61000
+Last-mile Delivery & Installation,Logistics,Expense,175000,241000
+Repairs & Maintenance,Operations,Expense,60000,58000
+Card & UPI Payment Charges,Finance,Expense,118000,131000
+Shrinkage / Damaged Stock,Operations,Expense,70000,104000
