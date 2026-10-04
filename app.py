@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-import altair as alt
+
 import pandas as pd
 import streamlit as st
 
@@ -291,8 +291,295 @@ def direction_conflicts(commentary: dict, res: pd.DataFrame) -> list[str]:
 
 
 # ----------------------------------------------------------------------------
-# 4. UI
+# 4. Visual layer: theme, charts, highlights, recommendations
 # ----------------------------------------------------------------------------
+import html as _html
+
+import plotly.graph_objects as go
+
+# Validated categorical order (dataviz reference palette) + reserved status colours
+SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+GOOD, BAD, NEUTRAL = "#0ca30c", "#d03b3b", "#c3c2b7"
+INK, INK2, MUTED, GRID = "#0b0b0b", "#52514e", "#898781", "#e1e0d9"
+BUDGET_C, ACTUAL_C = "#b7d3f6", "#2a78d6"   # light vs strong step of the same blue ramp
+
+CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], .stApp, .stMarkdown, button, input, textarea { font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+.stApp { background: #f4f6fb; }
+.block-container { padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1280px; }
+[data-testid="stSidebar"] { background: linear-gradient(180deg, #0f1f3d 0%, #13294f 100%); }
+[data-testid="stSidebar"] * { color: #e7ecf6 !important; }
+[data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea { color: #0b0b0b !important; }
+[data-testid="stSidebar"] [data-testid="stAlert"] { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); }
+.hero { background: radial-gradient(1200px 300px at 85% -40%, rgba(255,255,255,0.18), transparent),
+        linear-gradient(120deg, #0f1f3d 0%, #1c4f9c 55%, #2a78d6 100%);
+        border-radius: 22px; padding: 30px 34px 26px; color: #fff; margin-bottom: 18px;
+        box-shadow: 0 18px 40px -22px rgba(15,31,61,0.65); }
+.hero h1 { color: #fff; font-size: 2.05rem; font-weight: 800; margin: 0 0 6px; letter-spacing: -0.02em; }
+.hero p { color: #d9e6fb; font-size: 1.02rem; margin: 0 0 14px; max-width: 760px; }
+.chip { display: inline-block; background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.25);
+        color: #fff; border-radius: 999px; padding: 4px 12px; font-size: 0.8rem; font-weight: 600; margin: 0 6px 6px 0; }
+.card { background: #fff; border-radius: 18px; padding: 18px 20px; border: 1px solid rgba(11,11,11,0.06);
+        box-shadow: 0 6px 22px -14px rgba(15,31,61,0.35); height: 100%; }
+.kpi-label { color: #52514e; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+.kpi-value { color: #0b0b0b; font-size: 1.75rem; font-weight: 800; margin: 4px 0 2px; letter-spacing: -0.02em; }
+.kpi-sub { color: #52514e; font-size: 0.85rem; }
+.pill { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 0.78rem; font-weight: 700; }
+.pill-good { background: #e3f6e3; color: #006300; }
+.pill-bad { background: #fbe4e4; color: #a32626; }
+.pill-neutral { background: #eef0f4; color: #52514e; }
+.meter { height: 8px; background: #e8edf6; border-radius: 99px; margin: 12px 0 4px; overflow: hidden; }
+.meter > span { display: block; height: 100%; border-radius: 99px; }
+.meter-cap { color: #898781; font-size: 0.75rem; }
+.section-title { font-size: 1.15rem; font-weight: 800; color: #0f1f3d; margin: 8px 0 2px; }
+.section-sub { color: #52514e; font-size: 0.9rem; margin-bottom: 10px; }
+.hl-icon { font-size: 1.4rem; }
+.hl-title { font-weight: 700; color: #0f1f3d; margin: 6px 0 2px; font-size: 0.95rem; }
+.hl-big { font-size: 1.35rem; font-weight: 800; color: #0b0b0b; }
+.hl-text { color: #52514e; font-size: 0.86rem; margin-top: 4px; }
+.rec { background: #fff; border-radius: 14px; padding: 14px 16px; margin-bottom: 10px;
+       border: 1px solid rgba(11,11,11,0.06); border-left: 5px solid var(--accent, #2a78d6);
+       box-shadow: 0 4px 16px -12px rgba(15,31,61,0.35); }
+.rec-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.rec-title { font-weight: 700; color: #0f1f3d; }
+.rec-body { color: #52514e; font-size: 0.9rem; margin-top: 4px; }
+.prio { border-radius: 6px; padding: 2px 8px; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; white-space: nowrap; }
+.prio-high { background: #fbe4e4; color: #a32626; }
+.prio-med { background: #fff1d6; color: #8a5a00; }
+.prio-low { background: #e6effb; color: #1c5cab; }
+.outlier { background: #fff; border-radius: 16px; padding: 16px 18px; border: 1px solid rgba(11,11,11,0.06);
+           border-top: 5px solid var(--accent); box-shadow: 0 6px 20px -14px rgba(15,31,61,0.35); }
+.feature { text-align: left; }
+.feature h4 { margin: 8px 0 4px; color: #0f1f3d; font-size: 1rem; }
+.feature p { color: #52514e; font-size: 0.88rem; margin: 0; }
+.stTabs [data-baseweb="tab-list"] { gap: 6px; background: #fff; padding: 6px; border-radius: 14px;
+       border: 1px solid rgba(11,11,11,0.06); }
+.stTabs [data-baseweb="tab"] { border-radius: 10px; padding: 8px 16px; font-weight: 600; }
+.stTabs [aria-selected="true"] { background: #eaf2fd; color: #1c5cab !important; }
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] { display: none; }
+div[data-testid="stPlotlyChart"] { background: #fff; border-radius: 18px; padding: 8px 6px 2px;
+       border: 1px solid rgba(11,11,11,0.06); box-shadow: 0 6px 22px -14px rgba(15,31,61,0.35); }
+.stButton > button, .stDownloadButton > button { border-radius: 10px; font-weight: 600; }
+.foot { color: #898781; font-size: 0.8rem; text-align: center; margin-top: 26px; }
+</style>
+"""
+
+
+def esc(s) -> str:
+    return _html.escape(str(s))
+
+
+def lakh(x: float) -> str:
+    """Compact Indian format for charts and cards: ₹4.55 L / ₹1.19 Cr."""
+    if pd.isna(x):
+        return "-"
+    sign = "-" if x < 0 else ""
+    a = abs(x)
+    if a >= 1e7:
+        return f"{sign}₹{a / 1e7:.2f} Cr"
+    if a >= 1e5:
+        return f"{sign}₹{a / 1e5:.2f} L"
+    if a >= 1e3:
+        return f"{sign}₹{a / 1e3:.1f} K"
+    return f"{sign}₹{a:.0f}"
+
+
+def signed_lakh(x: float) -> str:
+    return ("+" if x > 0 else "") + lakh(x)
+
+
+def base_layout(fig: go.Figure, title: str, height: int = 380, legend: bool = True) -> go.Figure:
+    fig.update_layout(
+        title=dict(text=f"<b>{title}</b>", font=dict(size=15, color="#0f1f3d"), x=0.02, y=0.96),
+        height=height, margin=dict(l=12, r=16, t=56, b=12),
+        paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
+        font=dict(family="Inter, system-ui, sans-serif", size=12, color=INK2),
+        showlegend=legend,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1, font=dict(size=11)),
+        hoverlabel=dict(bgcolor="#0f1f3d", font=dict(color="#ffffff", family="Inter, sans-serif")),
+    )
+    fig.update_xaxes(gridcolor=GRID, zerolinecolor=NEUTRAL, linecolor=NEUTRAL, tickfont=dict(color=MUTED))
+    fig.update_yaxes(gridcolor=GRID, zerolinecolor=NEUTRAL, linecolor=NEUTRAL, tickfont=dict(color=INK2))
+    return fig
+
+
+PLOT_CFG = {"displayModeBar": False, "responsive": True}
+
+
+def chart_bridge(res: pd.DataFrame, nums: dict) -> go.Figure:
+    """Profit bridge: budget profit -> each line's profit impact -> actual profit."""
+    imp = res.copy()
+    # profit impact: revenue variance adds, expense variance subtracts
+    imp["Impact"] = imp.apply(lambda r: r["Variance"] if r["Type"] == "Revenue" else -r["Variance"], axis=1)
+    imp = imp[imp["Impact"] != 0].sort_values("Impact", key=abs, ascending=False)
+    top = imp.head(8)
+    rest = imp["Impact"].sum() - top["Impact"].sum()
+    labels = ["Budget profit"] + [str(x) for x in top["Line Item"]]
+    values = [nums["profit_budget"]] + list(top["Impact"])
+    measure = ["absolute"] + ["relative"] * len(top)
+    if abs(rest) > 0:
+        labels.append("All other lines")
+        values.append(rest)
+        measure.append("relative")
+    labels.append("Actual profit")
+    values.append(nums["profit_actual"])
+    measure.append("total")
+    text = [lakh(values[0])] + [signed_lakh(v) for v in values[1:-1]] + [lakh(values[-1])]
+    fig = go.Figure(go.Waterfall(
+        x=labels, y=values, measure=measure, text=text, textposition="outside",
+        textfont=dict(size=11, color=INK2),
+        increasing=dict(marker=dict(color=GOOD)), decreasing=dict(marker=dict(color=BAD)),
+        totals=dict(marker=dict(color="#1c5cab")),
+        connector=dict(line=dict(color=NEUTRAL, width=1, dash="dot")),
+        hovertemplate="%{x}<br>%{text}<extra></extra>",
+    ))
+    base_layout(fig, "Profit bridge — what moved profit from budget to actual", height=430, legend=False)
+    fig.update_yaxes(tickprefix="₹", tickformat="~s")
+    fig.update_xaxes(tickangle=-25)
+    return fig
+
+
+def chart_donut(labels, values, title: str, centre: str) -> go.Figure:
+    colors = [SERIES[i % len(SERIES)] for i in range(len(labels))]
+    fig = go.Figure(go.Pie(
+        labels=labels, values=values, hole=0.62, sort=False, direction="clockwise",
+        marker=dict(colors=colors, line=dict(color="#ffffff", width=2)),
+        textinfo="percent", textposition="inside", insidetextorientation="horizontal",
+        textfont=dict(size=12, color="#ffffff"),
+        hovertemplate="<b>%{label}</b><br>%{customdata}<br>%{percent} of total<extra></extra>",
+        customdata=[lakh(v) for v in values],
+    ))
+    base_layout(fig, title, height=380)
+    fig.update_layout(uniformtext=dict(minsize=10, mode="hide"), legend=dict(orientation="v", yanchor="middle", y=0.5, xanchor="left", x=1.02),
+                      margin=dict(l=12, r=12, t=56, b=12),
+                      annotations=[dict(text=centre, x=0.5, y=0.5, showarrow=False,
+                                        font=dict(size=15, color=INK, family="Inter"))])
+    return fig
+
+
+def chart_category_bars(res: pd.DataFrame) -> go.Figure:
+    g = res.groupby(["Category", "Type"], as_index=False, sort=False)[["Budget", "Actual"]].sum()
+    g["Label"] = g["Category"] + " (" + g["Type"].str[:3] + ")"
+    g = g.iloc[::-1]
+    fig = go.Figure()
+    fig.add_bar(y=g["Label"], x=g["Budget"], name="Budget", orientation="h",
+                marker=dict(color=BUDGET_C, line=dict(color="#ffffff", width=1)),
+                customdata=[lakh(v) for v in g["Budget"]], hovertemplate="%{y}<br>Budget %{customdata}<extra></extra>")
+    fig.add_bar(y=g["Label"], x=g["Actual"], name="Actual", orientation="h",
+                marker=dict(color=ACTUAL_C, line=dict(color="#ffffff", width=1)),
+                customdata=[lakh(v) for v in g["Actual"]], hovertemplate="%{y}<br>Actual %{customdata}<extra></extra>")
+    fig.update_layout(barmode="group", bargap=0.28, bargroupgap=0.08)
+    base_layout(fig, "Budget vs actual by category", height=400)
+    fig.update_xaxes(type="log", tickprefix="₹", tickformat="~s", title=dict(text="log scale", font=dict(size=10, color=MUTED)))
+    return fig
+
+
+def chart_variance_pct(res: pd.DataFrame, threshold: float) -> go.Figure:
+    d = res.dropna(subset=["Variance %"]).sort_values("Variance %")
+    colors = [GOOD if x == "Favourable" else (BAD if x == "Unfavourable" else NEUTRAL) for x in d["Direction"]]
+    fig = go.Figure(go.Bar(
+        y=d["Line Item"], x=d["Variance %"], orientation="h", marker=dict(color=colors),
+        customdata=list(zip(d["Direction"], [signed_lakh(v) for v in d["Variance"]])),
+        hovertemplate="<b>%{y}</b><br>%{x:+.1f}% · %{customdata[1]}<br>%{customdata[0]}<extra></extra>",
+    ))
+    for t in (threshold, -threshold):
+        fig.add_vline(x=t, line=dict(color=MUTED, width=1, dash="dash"))
+    base_layout(fig, f"Variance % by line  (dashed = ±{threshold}% materiality)", height=520, legend=False)
+    fig.update_layout(margin=dict(l=12, r=16, t=56, b=46))
+    fig.update_xaxes(ticksuffix="%", zeroline=True)
+    fig.add_annotation(x=1, y=-0.09, xref="paper", yref="paper", showarrow=False, xanchor="right",
+                       text="<span style='color:#0ca30c'>■</span> Favourable   "
+                            "<span style='color:#d03b3b'>■</span> Unfavourable",
+                       font=dict(size=11, color=INK2))
+    return fig
+
+
+def kpi_card(label, value, delta_text, good: bool | None, meter_pct=None, meter_cap="", meter_good=True, up=None):
+    pill = "pill-neutral" if good is None else ("pill-good" if good else "pill-bad")
+    arrow = "" if up is None else ("▲ " if up else "▼ ")  # arrow = direction of the number, colour = good/bad
+    meter = ""
+    if meter_pct is not None:
+        w = max(0, min(meter_pct, 100))
+        col = GOOD if meter_good else BAD
+        meter = (f"<div class='meter'><span style='width:{w:.0f}%;background:{col}'></span></div>"
+                 f"<div class='meter-cap'>{esc(meter_cap)}</div>")
+    return (f"<div class='card'><div class='kpi-label'>{esc(label)}</div>"
+            f"<div class='kpi-value'>{esc(value)}</div>"
+            f"<span class='pill {pill}'>{arrow}{esc(delta_text)}</span>{meter}</div>")
+
+
+def build_highlights(res: pd.DataFrame, nums: dict) -> list[dict]:
+    imp = res.copy()
+    imp["Impact"] = imp.apply(lambda r: r["Variance"] if r["Type"] == "Revenue" else -r["Variance"], axis=1)
+    best, worst = imp.loc[imp["Impact"].idxmax()], imp.loc[imp["Impact"].idxmin()]
+    over = res[(res["Type"] == "Expense") & (res["Direction"] == "Unfavourable") & res["Material?"]]
+    rev_att = nums["revenue_actual"] / nums["revenue_budget"] * 100 if nums["revenue_budget"] else 0
+    pv = nums["profit_variance"]
+    return [
+        {"icon": "🏆", "title": "Biggest win", "big": f"{best['Line Item']}",
+         "text": f"Added {signed_lakh(best['Impact'])} to profit ({best['Variance %']:+.1f}% vs budget).", "accent": GOOD},
+        {"icon": "⚠️", "title": "Biggest miss", "big": f"{worst['Line Item']}",
+         "text": f"Cost {lakh(abs(worst['Impact']))} of profit ({worst['Variance %']:+.1f}% vs budget).", "accent": BAD},
+        {"icon": "🎯", "title": "Revenue attainment", "big": f"{rev_att:.1f}%",
+         "text": f"{lakh(nums['revenue_actual'])} achieved of {lakh(nums['revenue_budget'])} planned.",
+         "accent": GOOD if rev_att >= 100 else BAD},
+        {"icon": "💸", "title": "Material cost overruns", "big": f"{len(over)} line(s)",
+         "text": (", ".join(over.sort_values('Variance', ascending=False)['Line Item'].head(3)) or "None")
+                 + (f" — together {lakh(over['Variance'].sum())} over." if len(over) else "."),
+         "accent": BAD if len(over) else GOOD},
+        {"icon": "📉" if pv < 0 else "📈", "title": "Profit vs budget", "big": signed_lakh(pv),
+         "text": (f"{abs(pv) / abs(nums['profit_budget']) * 100:.0f}% {'below' if pv < 0 else 'above'} the planned "
+                  f"{lakh(nums['profit_budget'])}." if nums["profit_budget"] else ""), "accent": GOOD if pv >= 0 else BAD},
+    ]
+
+
+def build_recommendations(res: pd.DataFrame, nums: dict) -> list[dict]:
+    """Rule-based, always available (no AI needed). Ranked by rupee impact on profit."""
+    recs = []
+    rev_budget = max(nums["revenue_budget"], 1)
+    rev_miss = res[(res["Type"] == "Revenue") & (res["Variance"] < 0)]["Variance"].sum()
+    for _, r in res[res["Material?"]].iterrows():
+        impact = r["Variance"] if r["Type"] == "Revenue" else -r["Variance"]
+        name, pct, amt = r["Line Item"], r["Variance %"], lakh(abs(r["Variance"]))
+        cat = str(r["Category"]).lower()
+        if r["Type"] == "Revenue" and impact < 0:
+            title = f"Recover {name}"
+            body = (f"{amt} short of plan ({pct:+.1f}%). Check stock availability, pricing vs competitors and "
+                    f"promotion timing; set a weekly recovery target for the next quarter.")
+        elif r["Type"] == "Revenue":
+            title = f"Double down on {name}"
+            body = (f"{amt} ahead of plan ({pct:+.1f}%). Protect stock depth and margins, and test whether the "
+                    f"same promotion works for weaker categories.")
+        elif impact < 0:
+            title = f"Control {name}"
+            body = (f"{amt} over budget ({pct:+.1f}%). Ask the owner for drivers, add an approval limit and "
+                    f"re-forecast this line before the next period.")
+            if "incentive" in name.lower() and rev_miss < 0:
+                body += " Incentives rose while revenue fell — review the incentive slabs."
+        else:
+            title = f"Review under-spend on {name}"
+            body = f"{amt} under budget ({pct:+.1f}%). Confirm the saving is real and not a delayed or skipped activity."
+            if "marketing" in cat and rev_miss < 0:
+                body += " Marketing was cut while revenue missed plan — check whether the two are linked."
+        share = abs(impact) / rev_budget * 100
+        prio = "HIGH" if share >= 2 else ("MEDIUM" if share >= 0.5 else "LOW")
+        recs.append({"title": title, "body": body, "prio": prio, "impact": impact,
+                     "accent": BAD if impact < 0 else GOOD})
+    order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    recs.sort(key=lambda x: (order[x["prio"]], -abs(x["impact"])))
+    return recs
+
+
+# ----------------------------------------------------------------------------
+# 5. Page
+# ----------------------------------------------------------------------------
+st.markdown(CSS, unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("## 📊 Variance Studio")
+    st.caption("Budget vs actual, explained.")
 sidebar_key_box()
 with st.sidebar:
     st.markdown("### Settings")
@@ -301,13 +588,16 @@ with st.sidebar:
                                "Top-3 outliers = material lines with the largest rupee impact.")
     period = st.text_input("Period label", "Q2 FY2026-27 (Jul-Sep)")
     st.markdown("---")
-    st.caption("Data you upload is processed in memory. When AI is on, the variance table "
-               "(not your file) is sent to Google's Gemini API to write commentary. "
-               "Don't upload personal data.")
+    st.caption("Data is processed in memory. With AI on, only the computed variance table (not your file) "
+               "is sent to Google's Gemini API. Don't upload personal data.")
 
-st.title("📊 Budget Variance Analyzer")
-st.write("Upload **Budget vs Actual** for any business unit. The app computes variances, flags the "
-         "**top 3 outliers**, and drafts **AI variance commentary** for your review meeting.")
+st.markdown(
+    "<div class='hero'><h1>📊 Budget Variance Analyzer</h1>"
+    "<p>Upload budget vs actual for any store, branch or cost centre. Get the profit bridge, the top-3 outliers, "
+    "prioritised actions and AI-written commentary that is checked against your numbers.</p>"
+    "<span class='chip'>⚡ Variance maths in code</span><span class='chip'>🥧 Visual dashboard</span>"
+    "<span class='chip'>💡 Ranked recommendations</span><span class='chip'>🤖 Gemini commentary</span>"
+    "<span class='chip'>✅ Auto number-check</span></div>", unsafe_allow_html=True)
 
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
@@ -315,15 +605,14 @@ with c1:
                           type=["csv", "xlsx"])
 with c2:
     st.write("")
-    if st.button("Load sample: Electronics store Q2", width="stretch"):
+    if st.button("📂 Load sample: Electronics store Q2", width="stretch", type="primary"):
         st.session_state["source"] = ("sample", SAMPLE.name)
+    if st.button("🧪 Load messy file (edge-case demo)", width="stretch"):
+        st.session_state["source"] = ("messy", MESSY.name)
 with c3:
     st.write("")
-    if st.button("Load messy file (edge-case demo)", width="stretch"):
-        st.session_state["source"] = ("messy", MESSY.name)
     with open(SAMPLE, "rb") as f:
-        st.download_button("Download template CSV", f, file_name="budget_template.csv",
-                           width="stretch")
+        st.download_button("⬇️ Download template CSV", f, file_name="budget_template.csv", width="stretch")
 
 raw = None
 if up is not None:
@@ -337,11 +626,20 @@ elif st.session_state.get("source"):
     raw = pd.read_csv(SAMPLE if kind == "sample" else MESSY)
 
 if raw is None:
-    st.info("Upload a file or load the sample to begin.")
+    feats = [("📥", "1. Upload", "CSV or Excel with Line Item, Category, Type, Budget and Actual — or load the sample."),
+             ("🧮", "2. Validate & compute", "Columns, ₹ formats, blanks, negatives and duplicates are checked before any maths."),
+             ("📊", "3. See the story", "Profit bridge, revenue and cost mix donuts, category bars and variance %."),
+             ("💡", "4. Act", "Ranked recommendations plus AI commentary with an automatic number check.")]
+    cols = st.columns(4)
+    for col, (ic, t, d) in zip(cols, feats):
+        col.markdown(f"<div class='card feature'><div class='hl-icon'>{ic}</div><h4>{t}</h4><p>{d}</p></div>",
+                     unsafe_allow_html=True)
+    st.markdown("<div class='foot'>Start with <b>Load sample</b> to see the full dashboard.</div>",
+                unsafe_allow_html=True)
     st.stop()
 
 df, errors, warnings = validate(raw)
-with st.expander(f"Input checks - {len(errors)} error(s), {len(warnings)} warning(s)",
+with st.expander(f"🛡️ Input checks — {len(errors)} error(s), {len(warnings)} warning(s)",
                  expanded=bool(errors or warnings)):
     for e in errors:
         st.error(e)
@@ -352,85 +650,143 @@ with st.expander(f"Input checks - {len(errors)} error(s), {len(warnings)} warnin
 if errors:
     st.stop()
 
-st.markdown("#### Review / edit the cleaned data")
-df = st.data_editor(
-    df, width="stretch", num_rows="dynamic", key="editor",
-    column_config={
-        "Type": st.column_config.SelectboxColumn(options=["Revenue", "Expense"], required=True),
-        "Budget": st.column_config.NumberColumn(format="%.0f"),
-        "Actual": st.column_config.NumberColumn(format="%.0f"),
-    },
-)
+with st.expander("✏️ Review / edit the cleaned data", expanded=False):
+    df = st.data_editor(
+        df, width="stretch", num_rows="dynamic", key="editor",
+        column_config={
+            "Type": st.column_config.SelectboxColumn(options=["Revenue", "Expense"], required=True),
+            "Budget": st.column_config.NumberColumn(format="%.0f"),
+            "Actual": st.column_config.NumberColumn(format="%.0f"),
+        },
+    )
 df = df.dropna(subset=["Line Item", "Budget", "Actual"])
 res = compute(df, threshold)
 nums = summary_numbers(res)
 
-# KPI row
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Revenue (actual)", inr(nums["revenue_actual"]),
-          f"{inr(nums['revenue_actual'] - nums['revenue_budget'])} vs budget")
-k2.metric("Expenses (actual)", inr(nums["expense_actual"]),
-          f"{inr(nums['expense_actual'] - nums['expense_budget'])} vs budget", delta_color="inverse")
-k3.metric("Profit (actual)", inr(nums["profit_actual"]), f"{inr(nums['profit_variance'])} vs budget")
-k4.metric("Material lines", f"{int(res['Material?'].sum())} of {len(res)}", help=f"Lines with |variance %| ≥ {threshold}%")
+# ---- KPI cards ----
+rev_var = nums["revenue_actual"] - nums["revenue_budget"]
+exp_var = nums["expense_actual"] - nums["expense_budget"]
+rev_att = nums["revenue_actual"] / nums["revenue_budget"] * 100 if nums["revenue_budget"] else 0
+exp_use = nums["expense_actual"] / nums["expense_budget"] * 100 if nums["expense_budget"] else 0
+prof_att = nums["profit_actual"] / nums["profit_budget"] * 100 if nums["profit_budget"] else 0
+n_mat = int(res["Material?"].sum())
+k = st.columns(4)
+k[0].markdown(kpi_card("Revenue", lakh(nums["revenue_actual"]), f"{signed_lakh(rev_var)} vs budget",
+                       good=rev_var >= 0, up=rev_var >= 0, meter_pct=rev_att,
+                       meter_cap=f"{rev_att:.1f}% of {lakh(nums['revenue_budget'])} target",
+                       meter_good=rev_att >= 100), unsafe_allow_html=True)
+k[1].markdown(kpi_card("Expenses", lakh(nums["expense_actual"]), f"{signed_lakh(exp_var)} vs budget",
+                       good=exp_var <= 0, up=exp_var >= 0, meter_pct=exp_use,
+                       meter_cap=f"{exp_use:.1f}% of {lakh(nums['expense_budget'])} budget used",
+                       meter_good=exp_use <= 100), unsafe_allow_html=True)
+k[2].markdown(kpi_card("Profit", lakh(nums["profit_actual"]), f"{signed_lakh(nums['profit_variance'])} vs budget",
+                       good=nums["profit_variance"] >= 0, up=nums["profit_variance"] >= 0, meter_pct=prof_att,
+                       meter_cap=f"{prof_att:.0f}% of {lakh(nums['profit_budget'])} planned",
+                       meter_good=prof_att >= 100), unsafe_allow_html=True)
+k[3].markdown(kpi_card("Material lines", f"{n_mat} of {len(res)}", f"threshold ±{threshold}%", good=None,
+                       meter_pct=n_mat / max(len(res), 1) * 100, meter_cap="share of lines needing an explanation",
+                       meter_good=n_mat / max(len(res), 1) < 0.3), unsafe_allow_html=True)
+st.write("")
 
-tab1, tab2, tab3 = st.tabs(["Variance table & top-3 outliers", "Charts", "AI commentary"])
+tab_dash, tab_hl, tab_detail, tab_ai = st.tabs(
+    ["📊 Dashboard", "💡 Highlights & actions", "🔎 Line-item detail", "🤖 AI commentary"])
 
-with tab1:
+# ---- Dashboard ----
+with tab_dash:
+    st.plotly_chart(chart_bridge(res, nums), config=PLOT_CFG, width="stretch")
+    rev = res[res["Type"] == "Revenue"]
+    opex = res[(res["Type"] == "Expense") & (~res["Category"].str.upper().isin(["COGS"]))]
+    opex_cat = opex.groupby("Category", sort=False)["Actual"].sum()
+    d1, d2 = st.columns(2)
+    with d1:
+        st.plotly_chart(chart_donut(list(rev["Line Item"]), list(rev["Actual"]), "Revenue mix (actual)",
+                                    f"<b>{lakh(rev['Actual'].sum())}</b><br><span style='font-size:11px;color:#898781'>total revenue</span>"),
+                        config=PLOT_CFG, width="stretch")
+    with d2:
+        st.plotly_chart(chart_donut(list(opex_cat.index), list(opex_cat.values), "Operating cost mix (actual, excl. COGS)",
+                                    f"<b>{lakh(opex_cat.sum())}</b><br><span style='font-size:11px;color:#898781'>operating costs</span>"),
+                        config=PLOT_CFG, width="stretch")
+    b1, b2 = st.columns(2)
+    with b1:
+        st.plotly_chart(chart_category_bars(res), config=PLOT_CFG, width="stretch")
+    with b2:
+        st.plotly_chart(chart_variance_pct(res, threshold), config=PLOT_CFG, width="stretch")
+    st.caption("Hover any bar or slice for exact values. Green = helped profit, red = hurt profit. "
+               "Every number on this page is calculated in code, not by the AI.")
+
+# ---- Highlights & recommendations ----
+with tab_hl:
+    st.markdown("<div class='section-title'>Key highlights</div>"
+                "<div class='section-sub'>The five numbers a store or finance head should see first.</div>",
+                unsafe_allow_html=True)
+    hls = build_highlights(res, nums)
+    cols = st.columns(len(hls))
+    for col, h in zip(cols, hls):
+        col.markdown(f"<div class='card' style='border-top:5px solid {h['accent']}'>"
+                     f"<div class='hl-icon'>{h['icon']}</div><div class='hl-title'>{esc(h['title'])}</div>"
+                     f"<div class='hl-big'>{esc(h['big'])}</div><div class='hl-text'>{esc(h['text'])}</div></div>",
+                     unsafe_allow_html=True)
+
+    st.write("")
+    st.markdown("<div class='section-title'>Top-3 outliers</div>"
+                "<div class='section-sub'>Material lines (beyond the threshold) with the largest rupee impact.</div>",
+                unsafe_allow_html=True)
     top = res[res["Outlier rank"].notna()].sort_values("Outlier rank")
     if top.empty:
         st.info("No line crosses the materiality threshold - nothing to flag.")
-    cols = st.columns(max(len(top), 1))
-    for col, (_, r) in zip(cols, top.iterrows()):
-        with col:
-            st.markdown(f"**#{int(r['Outlier rank'])} {r['Line Item']}**")
-            st.metric("Variance", inr(r["Variance"]), f"{r['Variance %']:+.1f}%",
-                      delta_color="normal" if r["Direction"] == "Favourable" else "inverse")
-            st.caption(f"{r['Direction']} · {r['Type']} · Budget {inr(r['Budget'])}")
+    else:
+        cols = st.columns(3)
+        for col, (_, r) in zip(cols, top.iterrows()):
+            fav = r["Direction"] == "Favourable"
+            col.markdown(
+                f"<div class='outlier' style='--accent:{GOOD if fav else BAD}'>"
+                f"<div class='kpi-label'>#{int(r['Outlier rank'])} · {esc(r['Type'])}</div>"
+                f"<div class='hl-title' style='font-size:1.05rem'>{esc(r['Line Item'])}</div>"
+                f"<div class='kpi-value'>{esc(signed_lakh(r['Variance']))}</div>"
+                f"<span class='pill {'pill-good' if fav else 'pill-bad'}'>{'▲' if fav else '▼'} {r['Variance %']:+.1f}% · "
+                f"{esc(r['Direction'])}</span>"
+                f"<div class='hl-text'>Budget {esc(lakh(r['Budget']))} → Actual {esc(lakh(r['Actual']))}</div></div>",
+                unsafe_allow_html=True)
 
+    st.write("")
+    st.markdown("<div class='section-title'>Recommended actions</div>"
+                "<div class='section-sub'>Rule-based and ranked by profit impact — available even when the AI is offline. "
+                "Priority: HIGH ≥ 2% of revenue budget, MEDIUM ≥ 0.5%.</div>", unsafe_allow_html=True)
+    recs = build_recommendations(res, nums)
+    if not recs:
+        st.success("No material variances — no action needed this period.")
+    pc = {"HIGH": "prio-high", "MEDIUM": "prio-med", "LOW": "prio-low"}
+    r1, r2 = st.columns(2)
+    for i, rc in enumerate(recs):
+        (r1 if i % 2 == 0 else r2).markdown(
+            f"<div class='rec' style='--accent:{rc['accent']}'><div class='rec-head'>"
+            f"<span class='rec-title'>{esc(rc['title'])}</span>"
+            f"<span class='prio {pc[rc['prio']]}'>{rc['prio']} · {esc(signed_lakh(rc['impact']))}</span></div>"
+            f"<div class='rec-body'>{esc(rc['body'])}</div></div>", unsafe_allow_html=True)
+
+# ---- Detail table ----
+with tab_detail:
     show = res.copy()
     for c in ("Budget", "Actual", "Variance"):
         show[c] = show[c].map(inr)
     show["Variance %"] = res["Variance %"].map(lambda v: "n/a" if pd.isna(v) else f"{v:+.1f}%")
 
     def colour(row):
-        base = "background-color: rgba(220,38,38,0.12)" if row["Direction"] == "Unfavourable" \
-            else ("background-color: rgba(22,163,74,0.12)" if row["Direction"] == "Favourable" else "")
+        base = "background-color: rgba(208,59,59,0.10)" if row["Direction"] == "Unfavourable" \
+            else ("background-color: rgba(12,163,12,0.10)" if row["Direction"] == "Favourable" else "")
         style = base if row["Material?"] else ""
         if pd.notna(row["Outlier rank"]):
             style += "; font-weight: 700"
         return [style] * len(row)
 
-    st.dataframe(show.style.apply(colour, axis=1), width="stretch", hide_index=True)
-    st.caption("Favourable = revenue above budget or expense below budget. "
-               "Shaded rows are material; bold rows are the top-3 outliers.")
+    st.dataframe(show.style.apply(colour, axis=1), width="stretch", hide_index=True, height=600)
+    st.caption("Favourable = revenue above budget or expense below budget. Shaded rows are material; "
+               "bold rows are the top-3 outliers.")
 
-with tab2:
-    long = res.melt(id_vars=["Line Item", "Type"], value_vars=["Budget", "Actual"],
-                    var_name="Series", value_name="Amount")
-    ch1 = alt.Chart(long).mark_bar().encode(
-        y=alt.Y("Line Item:N", sort=None, title=None),
-        x=alt.X("Amount:Q", title="₹"),
-        color=alt.Color("Series:N", scale=alt.Scale(domain=["Budget", "Actual"], range=["#94a3b8", "#2563eb"])),
-        yOffset="Series:N",
-        tooltip=["Line Item", "Series", alt.Tooltip("Amount:Q", format=",.0f")],
-    ).properties(height=520, title="Budget vs Actual")
-    pct = res.dropna(subset=["Variance %"])
-    ch2 = alt.Chart(pct).mark_bar().encode(
-        y=alt.Y("Line Item:N", sort="-x", title=None),
-        x=alt.X("Variance %:Q"),
-        color=alt.Color("Direction:N", scale=alt.Scale(
-            domain=["Favourable", "Unfavourable", "On budget"], range=["#16a34a", "#dc2626", "#94a3b8"])),
-        tooltip=["Line Item", alt.Tooltip("Variance %:Q", format="+.1f"), "Direction"],
-    ).properties(height=520, title="Variance % by line")
-    rule = alt.Chart(pd.DataFrame({"x": [threshold, -threshold]})).mark_rule(strokeDash=[4, 4]).encode(x="x:Q")
-    a, b = st.columns(2)
-    a.altair_chart(ch1, width="stretch")
-    b.altair_chart(ch2 + rule, width="stretch")
-
-with tab3:
+# ---- AI commentary ----
+with tab_ai:
     context = st.text_area(
-        "Business context (optional) - helps the AI suggest realistic drivers",
+        "Business context (optional) — helps the AI suggest realistic drivers",
         placeholder="e.g. New iPhone launch in September; laptop back-to-school sale postponed to Q3; "
                     "summer electricity tariff revision.",
         key="context",
@@ -458,8 +814,8 @@ with tab3:
 
     entry = cache.get(data_hash)
     if not entry:
-        st.info("Click **Generate commentary**. Only the computed variance table and your context "
-                "note are sent to the AI - not the uploaded file.")
+        st.info("Click **Generate commentary**. Only the computed variance table and your context note are sent "
+                "to the AI - not the uploaded file.")
     else:
         com, meta = entry["commentary"], entry["meta"]
         ai_badge(meta)
@@ -477,27 +833,31 @@ with tab3:
             else:
                 v2.success("Direction check: AI's favourable/unfavourable labels match the maths.")
 
-        st.markdown("##### Executive summary")
-        st.write(com.get("executive_summary", ""))
-        st.markdown("##### Top outliers")
+        st.markdown(f"<div class='card'><div class='section-title'>Executive summary</div>"
+                    f"<div class='rec-body' style='font-size:0.98rem'>{esc(com.get('executive_summary', ''))}</div></div>",
+                    unsafe_allow_html=True)
+        st.write("")
+        st.markdown("<div class='section-title'>Outlier commentary</div>", unsafe_allow_html=True)
         for c in com.get("outlier_comments", []):
-            icon = "🟢" if str(c.get("direction", "")).lower().startswith("fav") else "🔴"
-            with st.container(border=True):
-                st.markdown(f"{icon} **{c.get('line_item')}** - {c.get('comment')}")
-                drivers = c.get("possible_drivers") or []
-                if drivers:
-                    st.markdown("*Possible drivers to investigate:* " + "; ".join(drivers))
-                if c.get("suggested_action"):
-                    st.markdown(f"*Suggested action:* {c['suggested_action']}")
-        for title, key in [("Other observations", "other_observations"),
-                           ("Questions for budget owners", "questions_for_budget_owners"),
-                           ("Data-quality notes", "data_quality_notes")]:
+            fav = str(c.get("direction", "")).lower().startswith("fav")
+            drivers = "; ".join(c.get("possible_drivers") or [])
+            st.markdown(
+                f"<div class='rec' style='--accent:{GOOD if fav else BAD}'>"
+                f"<div class='rec-head'><span class='rec-title'>{'🟢' if fav else '🔴'} {esc(c.get('line_item'))}</span>"
+                f"<span class='pill {'pill-good' if fav else 'pill-bad'}'>{esc(c.get('direction', ''))}</span></div>"
+                f"<div class='rec-body'>{esc(c.get('comment', ''))}</div>"
+                + (f"<div class='rec-body'><b>Possible drivers:</b> {esc(drivers)}</div>" if drivers else "")
+                + (f"<div class='rec-body'><b>Suggested action:</b> {esc(c.get('suggested_action'))}</div>"
+                   if c.get("suggested_action") else "") + "</div>", unsafe_allow_html=True)
+        cols = st.columns(3)
+        for col, (title, key) in zip(cols, [("👀 Other observations", "other_observations"),
+                                            ("❓ Questions for budget owners", "questions_for_budget_owners"),
+                                            ("🧹 Data-quality notes", "data_quality_notes")]):
             items = com.get(key) or []
-            if items:
-                st.markdown(f"##### {title}")
-                st.markdown("\n".join(f"- {i}" for i in items))
+            body = "".join(f"<li>{esc(i)}</li>" for i in items) or "<li>None</li>"
+            col.markdown(f"<div class='card'><div class='hl-title'>{title}</div>"
+                         f"<ul class='rec-body' style='padding-left:18px'>{body}</ul></div>", unsafe_allow_html=True)
 
-        # export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as xw:
             res.to_excel(xw, sheet_name="Variance", index=False)
@@ -505,10 +865,11 @@ with tab3:
             for c in com.get("outlier_comments", []):
                 rows.append((c.get("line_item"), f"{c.get('comment')} Drivers: "
                              f"{'; '.join(c.get('possible_drivers') or [])}. Action: {c.get('suggested_action')}"))
+            for rc in build_recommendations(res, nums):
+                rows.append((f"Action ({rc['prio']})", f"{rc['title']}: {rc['body']}"))
             pd.DataFrame(rows, columns=["Item", "Commentary"]).to_excel(xw, sheet_name="Commentary", index=False)
-        st.download_button("⬇️ Download report (Excel)", buf.getvalue(),
-                           file_name="variance_report.xlsx", type="secondary")
+        st.write("")
+        st.download_button("⬇️ Download report (Excel)", buf.getvalue(), file_name="variance_report.xlsx")
 
-st.markdown("---")
-st.caption("AI-generated commentary is a draft for a finance professional to review. Causes are "
-           "hypotheses, not findings. All arithmetic is done in code, not by the AI.")
+st.markdown("<div class='foot'>AI commentary is a draft for a finance professional to review. Causes are hypotheses, "
+            "not findings. All arithmetic is done in code, not by the AI.</div>", unsafe_allow_html=True)
