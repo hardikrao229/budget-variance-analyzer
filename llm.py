@@ -20,7 +20,7 @@ import time
 
 import streamlit as st
 
-DEFAULT_MODELS = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.0-flash"]
+DEFAULT_MODELS = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
 MIN_SECONDS_BETWEEN_CALLS = 2.0
 
 
@@ -155,11 +155,18 @@ def generate(
             except Exception as e:
                 last_err = str(e)
                 msg = last_err.lower()
-                if "not found" in msg or "404" in msg or "not supported" in msg:
-                    break  # try next model
-                if "api key" in msg or "permission" in msg or "401" in msg or "403" in msg:
+                if ("not found" in msg or "404" in msg or "not supported" in msg
+                        or "no longer available" in msg):
+                    break  # model retired / unavailable -> try next model
+                if "denied access" in msg:
+                    meta["error"] = ("Google has blocked this key's project ('project denied access') - "
+                                     "create a key from a different Google account")
+                    return "", meta
+                if "api key" in msg or "401" in msg:
                     meta["error"] = "API key rejected - check the key"
                     return "", meta
+                if "permission" in msg or "403" in msg:
+                    break  # this model not allowed for the project -> try next model
                 if "429" in msg or "quota" in msg or "resource_exhausted" in msg:
                     time.sleep(3)
                 else:
